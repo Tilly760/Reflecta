@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import "./App.css";
 import EntryCard from "./components/EntryCard";
 import Calendar from "./components/Calendar";
@@ -6,13 +6,46 @@ import Calendar from "./components/Calendar";
 const MOODS = ["😊", "🙂", "😐", "😔", "😭"];
 
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem("theme");
+    if (stored) return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    if (theme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((t) => (t === "light" ? "dark" : "light"));
+  };
+
   const [search, setSearch] = useState("");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [mood, setMood] = useState("😊");
+  const [tasks, setTasks] = useState([{ text: "", done: false }]);
+  const [lockedUntil, setLockedUntil] = useState("");
 
   const [entries, setEntries] = useState(() => {
-    return JSON.parse(localStorage.getItem("entries") || "[]");
+    const loaded = JSON.parse(localStorage.getItem("entries") || "[]");
+    const today = new Date();
+    const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    let changed = false;
+    const updated = loaded.map(entry => {
+      if (entry.type === "future" && entry.lockedUntil && entry.lockedUntil <= key && !entry.delivered) {
+        changed = true;
+        return { ...entry, pinned: true, delivered: true };
+      }
+      return entry;
+    });
+    if (changed) localStorage.setItem("entries", JSON.stringify(updated));
+    return changed ? updated : loaded;
   });
 
   const [editingIndex, setEditingIndex] = useState(null);
@@ -20,7 +53,7 @@ export default function App() {
   const [viewingIndex, setViewingIndex] = useState(null);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState(null);
 
-  // View state: "list" | "view" | "compose"
+  // View state: "list" | "view" | "compose" | "choose" | "todo-compose" | "future-compose"
   const [view, setView] = useState("list");
   const navigateTo = (newView) => {
     if (document.startViewTransition) {
@@ -36,6 +69,103 @@ export default function App() {
     setToast(message);
     setTimeout(() => setToast(null), 2200);
   }, []);
+
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const visibleEntries = entries.filter(entry =>
+    !(entry.type === "future" && entry.lockedUntil && entry.lockedUntil > todayKey)
+  );
+
+  // Auto-save draft
+  useEffect(() => {
+    if (view === "compose") {
+      const hasContent = title.trim() || text.trim();
+      if (hasContent) {
+        const draft = { editingIndex, title, text, mood };
+        localStorage.setItem("draft", JSON.stringify(draft));
+      } else {
+        localStorage.removeItem("draft");
+      }
+    } else if (view === "todo-compose") {
+      const hasContent = title.trim() || tasks.some(t => t.text.trim());
+      if (hasContent) {
+        const draft = { editingIndex, title, tasks };
+        localStorage.setItem("todo-draft", JSON.stringify(draft));
+      } else {
+        localStorage.removeItem("todo-draft");
+      }
+    } else if (view === "future-compose") {
+      const hasContent = title.trim() || text.trim();
+      if (hasContent) {
+        const draft = { editingIndex, title, text, mood, lockedUntil };
+        localStorage.setItem("future-draft", JSON.stringify(draft));
+      } else {
+        localStorage.removeItem("future-draft");
+      }
+    }
+  }, [title, text, mood, editingIndex, view, tasks, lockedUntil]);
+
+  // Restore draft on mount
+  useEffect(() => {
+    const savedDraft = localStorage.getItem("draft");
+    if (savedDraft) {
+      try {
+        const { editingIndex: dIndex, title: dTitle, text: dText, mood: dMood } = JSON.parse(savedDraft);
+        if (dTitle.trim() || dText.trim()) {
+          setEditingIndex(dIndex);
+          setTitle(dTitle);
+          setText(dText);
+          setMood(dMood);
+          setView("compose");
+          setTimeout(() => {
+            showToast("📝 Unsaved draft restored");
+          }, 100);
+        }
+      } catch (e) {
+        console.error("Failed to parse draft", e);
+      }
+      return;
+    }
+
+    const savedTodoDraft = localStorage.getItem("todo-draft");
+    if (savedTodoDraft) {
+      try {
+        const { editingIndex: dIndex, title: dTitle, tasks: dTasks } = JSON.parse(savedTodoDraft);
+        if (dTitle.trim() || dTasks.some(t => t.text.trim())) {
+          setEditingIndex(dIndex);
+          setTitle(dTitle);
+          setTasks(dTasks);
+          setView("todo-compose");
+          setTimeout(() => {
+            showToast("📋 Unsaved draft restored");
+          }, 100);
+        }
+      } catch (e) {
+        console.error("Failed to parse todo draft", e);
+      }
+      return;
+    }
+
+    const savedFutureDraft = localStorage.getItem("future-draft");
+    if (savedFutureDraft) {
+      try {
+        const { editingIndex: dIndex, title: dTitle, text: dText, mood: dMood, lockedUntil: dLocked } = JSON.parse(savedFutureDraft);
+        if (dTitle.trim() || dText.trim()) {
+          setEditingIndex(dIndex);
+          setTitle(dTitle);
+          setText(dText);
+          setMood(dMood);
+          setLockedUntil(dLocked || "");
+          setView("future-compose");
+          setTimeout(() => {
+            showToast("🔮 Unsaved draft restored");
+          }, 100);
+        }
+      } catch (e) {
+        console.error("Failed to parse future draft", e);
+      }
+    }
+  }, [showToast]);
 
   // Calendar
   const now = new Date();
@@ -81,6 +211,7 @@ export default function App() {
       setEntries(updated);
     }
     localStorage.setItem("entries", JSON.stringify(updated));
+    localStorage.removeItem("draft");
     setText("");
     setTitle("");
     navigateTo("list");
@@ -110,17 +241,34 @@ export default function App() {
 
   const editEntry = (index) => {
     const entry = entries[index];
-    setTitle(entry.title || "");
-    setText(entry.text);
-    setMood(entry.mood);
-    setEditingIndex(index);
-    navigateTo("compose");
+    if (entry.type === "todo") {
+      setTitle(entry.title || "");
+      setTasks(entry.tasks || [{ text: "", done: false }]);
+      setEditingIndex(index);
+      navigateTo("todo-compose");
+    } else if (entry.type === "future") {
+      setTitle(entry.title || "");
+      setText(entry.text);
+      setMood(entry.mood);
+      setLockedUntil(entry.lockedUntil || "");
+      setEditingIndex(index);
+      navigateTo("future-compose");
+    } else {
+      setTitle(entry.title || "");
+      setText(entry.text);
+      setMood(entry.mood);
+      setEditingIndex(index);
+      navigateTo("compose");
+    }
   };
 
   const cancelEdit = () => {
+    localStorage.removeItem("draft");
     setTitle("");
     setText("");
     setMood("😊");
+    setLockedUntil("");
+    setTasks([{ text: "", done: false }]);
     setEditingIndex(null);
     setViewingIndex(null);
     navigateTo("list");
@@ -133,20 +281,170 @@ export default function App() {
 
   const handleEditFromView = () => {
     const entry = entries[viewingIndex];
-    setTitle(entry.title || "");
-    setText(entry.text);
-    setMood(entry.mood);
-    setEditingIndex(viewingIndex);
-    setViewingIndex(null);
-    navigateTo("compose");
+    if (entry.type === "todo") {
+      setTitle(entry.title || "");
+      setTasks(entry.tasks || [{ text: "", done: false }]);
+      setEditingIndex(viewingIndex);
+      setViewingIndex(null);
+      navigateTo("todo-compose");
+    } else if (entry.type === "future") {
+      setTitle(entry.title || "");
+      setText(entry.text);
+      setMood(entry.mood);
+      setLockedUntil(entry.lockedUntil || "");
+      setEditingIndex(viewingIndex);
+      setViewingIndex(null);
+      navigateTo("future-compose");
+    } else {
+      setTitle(entry.title || "");
+      setText(entry.text);
+      setMood(entry.mood);
+      setEditingIndex(viewingIndex);
+      setViewingIndex(null);
+      navigateTo("compose");
+    }
   };
 
   const handleAddNew = () => {
+    navigateTo("choose");
+  };
+
+  const handleChooseJournal = () => {
     setTitle("");
     setText("");
     setMood("😊");
     setEditingIndex(null);
     navigateTo("compose");
+  };
+
+  const handleChooseTodo = () => {
+    setTitle("");
+    setTasks([{ text: "", done: false }]);
+    setEditingIndex(null);
+    navigateTo("todo-compose");
+  };
+
+  const handleChooseFuture = () => {
+    setTitle("");
+    setText("");
+    setMood("😊");
+    setLockedUntil("");
+    setEditingIndex(null);
+    navigateTo("future-compose");
+  };
+
+  // ─── Todo Handlers ───────────────────────────────
+
+  const handleTaskChange = (index, value) => {
+    setTasks(prev => prev.map((t, i) => (i === index ? { ...t, text: value } : t)));
+  };
+
+  const handleTaskToggle = (index) => {
+    setTasks(prev => prev.map((t, i) => (i === index ? { ...t, done: !t.done } : t)));
+  };
+
+  const handleAddTask = () => {
+    setTasks(prev => [...prev, { text: "", done: false }]);
+  };
+
+  const handleRemoveTask = (index) => {
+    setTasks(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const saveTodo = () => {
+    if (!title.trim()) return;
+
+    const validTasks = tasks.filter(t => t.text.trim());
+    if (validTasks.length === 0) return;
+
+    const entry = {
+      type: "todo",
+      title: title.trim(),
+      tasks: validTasks,
+      date: new Date().toISOString(),
+      pinned: editingIndex !== null ? entries[editingIndex]?.pinned || false : false,
+    };
+
+    let updated;
+    if (editingIndex !== null) {
+      updated = [...entries];
+      updated[editingIndex] = entry;
+      setEditingIndex(null);
+    } else {
+      updated = [entry, ...entries];
+    }
+
+    if (document.startViewTransition) {
+      document.startViewTransition(() => setEntries(updated));
+    } else {
+      setEntries(updated);
+    }
+    localStorage.setItem("entries", JSON.stringify(updated));
+    localStorage.removeItem("todo-draft");
+    setTitle("");
+    setTasks([{ text: "", done: false }]);
+    navigateTo("list");
+    showToast(editingIndex !== null ? "✅ List updated" : "📋 List saved");
+  };
+
+  const cancelTodo = () => {
+    localStorage.removeItem("todo-draft");
+    setTitle("");
+    setTasks([{ text: "", done: false }]);
+    setEditingIndex(null);
+    navigateTo("list");
+  };
+
+  // ─── Future Handlers ────────────────────────────
+
+  const saveFuture = () => {
+    if (!title.trim() || !text.trim() || !lockedUntil) return;
+
+    if (lockedUntil <= todayKey) return;
+
+    const entry = {
+      type: "future",
+      title: title.trim(),
+      text,
+      mood,
+      lockedUntil: lockedUntil,
+      date: new Date().toISOString(),
+      pinned: editingIndex !== null ? entries[editingIndex]?.pinned || false : false,
+      delivered: editingIndex !== null ? (entries[editingIndex]?.delivered || false) : false,
+    };
+
+    let updated;
+    if (editingIndex !== null) {
+      updated = [...entries];
+      updated[editingIndex] = entry;
+      setEditingIndex(null);
+    } else {
+      updated = [entry, ...entries];
+    }
+
+    if (document.startViewTransition) {
+      document.startViewTransition(() => setEntries(updated));
+    } else {
+      setEntries(updated);
+    }
+    localStorage.setItem("entries", JSON.stringify(updated));
+    localStorage.removeItem("future-draft");
+    setTitle("");
+    setText("");
+    setMood("😊");
+    setLockedUntil("");
+    navigateTo("list");
+    showToast(editingIndex !== null ? "🔮 Letter updated" : "✨ Sent to the future");
+  };
+
+  const cancelFuture = () => {
+    localStorage.removeItem("future-draft");
+    setTitle("");
+    setText("");
+    setMood("😊");
+    setLockedUntil("");
+    setEditingIndex(null);
+    navigateTo("list");
   };
 
   const togglePin = (index) => {
@@ -170,16 +468,27 @@ export default function App() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   };
 
-  const displayedEntries = entries
+  const displayedEntries = visibleEntries
     .map((entry, originalIndex) => ({ ...entry, originalIndex }))
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    .sort((a, b) => {
+      const aFutureTop = a.type === "future" && a.pinned;
+      const bFutureTop = b.type === "future" && b.pinned;
+      if (aFutureTop && !bFutureTop) return -1;
+      if (!aFutureTop && bFutureTop) return 1;
+      return Number(b.pinned) - Number(a.pinned);
+    });
 
   const filteredEntries = displayedEntries.filter((entry) => {
     const query = search.toLowerCase();
-    const matchesSearch =
-      (entry.title || "").toLowerCase().includes(query) ||
-      entry.text.toLowerCase().includes(query) ||
-      entry.mood.includes(query);
+    let searchText;
+    if (entry.type === "todo") {
+      searchText = (entry.title || "") + " " + (entry.tasks || []).map(t => t.text).join(" ");
+    } else if (entry.type === "future") {
+      searchText = (entry.title || "") + " " + (entry.text || "") + " future letter";
+    } else {
+      searchText = (entry.title || "") + " " + (entry.text || "") + " " + (entry.mood || "");
+    }
+    const matchesSearch = searchText.toLowerCase().includes(query);
     const matchesDate = selectedDate ? toDateKey(entry.date) === selectedDate : true;
     return matchesSearch && matchesDate;
   });
@@ -188,6 +497,13 @@ export default function App() {
 
   return (
     <div className="app">
+
+      {/* Theme Toggle Top Bar */}
+      <div className="top-bar">
+        <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>
+          {theme === "light" ? "🌙" : "☀️"}
+        </button>
+      </div>
 
       {/* Toast */}
       {toast && (
@@ -218,7 +534,7 @@ export default function App() {
       {/* Header */}
       <header className="app-header">
         <h1 className="app-logo">
-          <span className="logo-reflect">Reflect</span>
+          <span className="logo-reflect">Reflecta</span>
           <span className="logo-dot">.</span>
         </h1>
         <p className="app-tagline">Your personal space for thoughts &amp; reflections</p>
@@ -254,7 +570,7 @@ export default function App() {
             {showCalendar && (
               <div className="calendar-popover">
                 <Calendar
-                  entries={entries}
+                  entries={visibleEntries}
                   selectedDate={selectedDate}
                   onSelectDate={(date) => { setSelectedDate(date); setShowCalendar(false); }}
                   year={calYear}
@@ -277,10 +593,10 @@ export default function App() {
             <div className="empty-state">
               <div className="empty-icon">📝</div>
               <p className="empty-title">
-                {entries.length === 0 ? "No memories yet" : "No matching memories"}
+                {visibleEntries.length === 0 ? "No memories yet" : "No matching memories"}
               </p>
               <p className="empty-subtitle">
-                {entries.length === 0
+                {visibleEntries.length === 0
                   ? "Start writing to capture your thoughts"
                   : "Try adjusting your search or date filter"}
               </p>
@@ -302,38 +618,278 @@ export default function App() {
         </>
       )}
 
-      {/* ── READ-ONLY VIEW ── */}
-      {view === "view" && viewingIndex !== null && (
+      {/* ── CHOOSE VIEW ── */}
+      {view === "choose" && (
         <>
-          <div className="composer-header">
-            <button className="btn btn-ghost" onClick={cancelEdit} style={{ padding: "0.5rem 0.75rem" }}>
+          <div className="choose-header">
+            <button className="btn btn-ghost" onClick={() => navigateTo("list")} style={{ padding: "0.5rem 0.75rem" }}>
               ← Back
-            </button>
-            <button className="btn btn-primary" onClick={handleEditFromView} style={{ marginLeft: "auto" }}>
-              ✏️ Edit
             </button>
           </div>
 
-          <div className="entry-view card">
-            <div className="entry-meta">
-              <div className="entry-meta-left">
-                <span className="entry-mood">{entries[viewingIndex]?.mood}</span>
-                <span className="entry-date">
-                  {new Date(entries[viewingIndex]?.date).toLocaleDateString("en-US", {
-                    weekday: "long", year: "numeric", month: "long", day: "numeric",
-                    hour: "numeric", minute: "2-digit",
-                  })}
-                </span>
+          <div className="choose">
+            <h2 className="choose-heading">What would you like to create?</h2>
+
+            <button className="choose-option" onClick={handleChooseTodo}>
+              <span className="choose-icon">📋</span>
+              <div className="choose-info">
+                <span className="choose-title">To-do List</span>
+                <span className="choose-desc">Plan your tasks and stay organized</span>
               </div>
-              {entries[viewingIndex]?.pinned && (
-                <span className="entry-pin-badge">📌 Pinned</span>
-              )}
-            </div>
-            {entries[viewingIndex]?.title && (
-              <h2 className="entry-view-title">{entries[viewingIndex].title}</h2>
-            )}
-            <p className="entry-view-text">{entries[viewingIndex]?.text}</p>
+              <span className="choose-arrow">→</span>
+            </button>
+
+            <button className="choose-option" onClick={handleChooseJournal}>
+              <span className="choose-icon">📝</span>
+              <div className="choose-info">
+                <span className="choose-title">Journal Entry</span>
+                <span className="choose-desc">Write down your thoughts and reflections</span>
+              </div>
+              <span className="choose-arrow">→</span>
+            </button>
+
+            <button className="choose-option" onClick={handleChooseFuture}>
+              <span className="choose-icon">🔮</span>
+              <div className="choose-info">
+                <span className="choose-title">To the Future</span>
+                <span className="choose-desc">Write a letter to your future self</span>
+              </div>
+              <span className="choose-arrow">→</span>
+            </button>
           </div>
+        </>
+      )}
+
+      {/* ── TODO COMPOSE VIEW ── */}
+      {view === "todo-compose" && (
+        <>
+          <div className="composer-header">
+            <button className="btn btn-ghost" onClick={cancelTodo} style={{ padding: "0.5rem 0.75rem" }}>
+              ← Back
+            </button>
+            <span className="composer-title">
+              {editingIndex !== null ? "Edit To-do List" : "New To-do List"}
+            </span>
+          </div>
+
+          <div className="composer card">
+            <input
+              type="text"
+              className="composer-title-input"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="List title…"
+              autoFocus
+            />
+
+            <div className="todo-tasks">
+              {tasks.map((task, i) => (
+                <div key={i} className="todo-task-row">
+                  <button
+                    className={`todo-checkbox ${task.done ? "checked" : ""}`}
+                    onClick={() => handleTaskToggle(i)}
+                    aria-label={task.done ? "Mark as not done" : "Mark as done"}
+                  >
+                    {task.done ? "✓" : ""}
+                  </button>
+                  <input
+                    type="text"
+                    className="todo-task-input"
+                    value={task.text}
+                    onChange={(e) => handleTaskChange(i, e.target.value)}
+                    placeholder="Write a task…"
+                  />
+                  <button
+                    className="todo-remove-btn"
+                    onClick={() => handleRemoveTask(i)}
+                    aria-label="Remove task"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button className="todo-add-btn" onClick={handleAddTask}>
+              ＋ Add another task
+            </button>
+
+            <div className="composer-actions">
+              <button className="btn btn-ghost" onClick={cancelTodo}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={saveTodo}
+                disabled={!title.trim() || !tasks.some(t => t.text.trim())}
+              >
+                {editingIndex !== null ? "Update List" : "Save List"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── FUTURE COMPOSE VIEW ── */}
+      {view === "future-compose" && (
+        <>
+          <div className="composer-header">
+            <button className="btn btn-ghost" onClick={cancelFuture} style={{ padding: "0.5rem 0.75rem" }}>
+              ← Back
+            </button>
+            <span className="composer-title future-title">
+              ✧ Future Letter
+            </span>
+          </div>
+
+          <div className="future-composer card">
+            <div className="future-composer-glow" />
+
+            <div className="composer-top">
+              <div className="mood-selector">
+                <span className="mood-label">Mood</span>
+                <div className="mood-pills">
+                  {MOODS.map((m) => (
+                    <button
+                      key={m}
+                      className={`mood-pill ${mood === m ? "active" : ""}`}
+                      onClick={() => setMood(m)}
+                      aria-label={`Select mood ${m}`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <input
+              type="text"
+              className="composer-title-input future-title-input"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Title your letter…"
+              autoFocus
+            />
+
+            <textarea
+              className="composer-textarea future-textarea"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Write a letter to your future self…"
+              rows={8}
+            />
+
+            <div className="future-date-section">
+              <span className="future-date-label">✧ Deliver on</span>
+              <input
+                type="date"
+                className="future-date-input"
+                value={lockedUntil}
+                onChange={(e) => setLockedUntil(e.target.value)}
+                min={new Date(Date.now() + 86400000).toISOString().split("T")[0]}
+              />
+            </div>
+
+            <div className="composer-actions">
+              <button className="btn btn-ghost" onClick={cancelFuture}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-future"
+                onClick={saveFuture}
+                disabled={!title.trim() || !text.trim() || !lockedUntil}
+              >
+                ✧ Send to Future
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── READ-ONLY VIEW ── */}
+      {view === "view" && viewingIndex !== null && (
+        <>
+          {(() => {
+            const entry = entries[viewingIndex];
+            const isFuture = entry?.type === "future";
+            const isLocked = isFuture && entry.lockedUntil > todayKey;
+
+            return (
+              <div className="composer-header">
+                <button className="btn btn-ghost" onClick={cancelEdit} style={{ padding: "0.5rem 0.75rem" }}>
+                  ← Back
+                </button>
+                {!isLocked && entry?.type !== "future" && (
+                  <button className="btn btn-primary" onClick={handleEditFromView} style={{ marginLeft: "auto" }}>
+                    ✏️ Edit
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
+          {(() => {
+            const entry = entries[viewingIndex];
+            const isFuture = entry?.type === "future";
+            const isLocked = isFuture && entry.lockedUntil > todayKey;
+
+            return (
+              <div className={`entry-view card ${isLocked ? "entry-locked" : ""}`}>
+                <div className="entry-meta">
+                  <div className="entry-meta-left">
+                    {entry?.type === "todo" ? (
+                      <span className="entry-mood">📋</span>
+                    ) : isFuture ? (
+                      <span className="entry-mood">🔮</span>
+                    ) : (
+                      <span className="entry-mood">{entry?.mood}</span>
+                    )}
+                    <span className="entry-date">
+                      {new Date(entry?.date).toLocaleDateString("en-US", {
+                        weekday: "long", year: "numeric", month: "long", day: "numeric",
+                        hour: "numeric", minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  {entry?.pinned && (
+                    <span className="entry-pin-badge">📌 Pinned</span>
+                  )}
+                </div>
+
+                {isLocked ? (
+                  <div className="locked-overlay">
+                    <div className="locked-icon">🔮</div>
+                    <h2 className="locked-title">Sealed until</h2>
+                    <p className="locked-date">
+                      {new Date(entry.lockedUntil + "T12:00:00").toLocaleDateString("en-US", {
+                        weekday: "long", year: "numeric", month: "long", day: "numeric",
+                      })}
+                    </p>
+                    <p className="locked-subtitle">This letter is waiting for the right moment.</p>
+                  </div>
+                ) : (
+                  <>
+                    {entry?.title && (
+                      <h2 className="entry-view-title">{entry.title}</h2>
+                    )}
+                    {entry?.type === "todo" ? (
+                      <div className="todo-view-list">
+                        {entry?.tasks?.map((task, i) => (
+                          <div key={i} className={`todo-view-row ${task.done ? "done" : ""}`}>
+                            <span className="todo-view-check">{task.done ? "✓" : "○"}</span>
+                            <span className="todo-view-text">{task.text}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="entry-view-text">{entry?.text}</p>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </>
       )}
 
