@@ -1106,6 +1106,9 @@ html.dark .future-envelope-card {
   color: var(--text-secondary);
   margin-bottom: 0.75rem;
   word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .entry-actions {

@@ -7,6 +7,7 @@ export default function EntryCard({
   onView,
   isDeleting
 }) {
+
   const formatDate = (dateStr) => {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;

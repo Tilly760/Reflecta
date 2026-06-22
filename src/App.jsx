@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import "./App.css";
 import EntryCard from "./components/EntryCard";
 import Calendar from "./components/Calendar";
+import { downloadPdf } from "./utils/downloadPdf";
 
 const MOODS = ["😊", "🙂", "😐", "😔", "😭"];
 
@@ -52,6 +53,8 @@ export default function App() {
   const [deletingIndex, setDeletingIndex] = useState(null);
   const [viewingIndex, setViewingIndex] = useState(null);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState(null);
+
+
 
   // View state: "list" | "view" | "compose" | "choose" | "todo-compose" | "future-compose"
   const [view, setView] = useState("list");
@@ -469,7 +472,7 @@ export default function App() {
   };
 
   const displayedEntries = visibleEntries
-    .map((entry, originalIndex) => ({ ...entry, originalIndex }))
+    .map(entry => ({ ...entry, originalIndex: entries.indexOf(entry) }))
     .sort((a, b) => {
       const aFutureTop = a.type === "future" && a.pinned;
       const bFutureTop = b.type === "future" && b.pinned;
@@ -823,6 +826,11 @@ export default function App() {
                 {!isLocked && entry?.type !== "future" && (
                   <button className="btn btn-primary" onClick={handleEditFromView} style={{ marginLeft: "auto" }}>
                     ✏️ Edit
+                  </button>
+                )}
+                {entry && (
+                  <button className="btn btn-ghost" onClick={() => downloadPdf(entry, document.querySelector(".entry-view"))} style={{ marginLeft: !isLocked && entry?.type !== "future" ? "0.5rem" : "auto" }}>
+                    📄 PDF
                   </button>
                 )}
               </div>
