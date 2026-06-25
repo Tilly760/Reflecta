@@ -135,29 +135,22 @@ body {
 }
 
 .app-logo {
-  font-family: var(--font-display);
-  font-size: clamp(1.75rem, 6vw, 2.5rem);
-  font-weight: 900;
-  letter-spacing: -0.05em;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   margin-bottom: 0.25rem;
-  line-height: 1;
 }
 
-.logo-reflect {
-  background: linear-gradient(135deg, var(--accent) 20%, #a78bfa 60%, #c084fc 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+.app-logo-img {
+  height: clamp(56px, 12vw, 88px);
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 12px rgba(124, 58, 237, 0.18));
+  transition: filter 0.3s ease;
 }
 
-.logo-dot {
-  background: linear-gradient(135deg, #c084fc, #f0abfc);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  font-size: clamp(2.25rem, 7vw, 3rem);
-  line-height: 0;
-  vertical-align: -0.1em;
+.app-logo-img:hover {
+  filter: drop-shadow(0 4px 20px rgba(124, 58, 237, 0.32));
 }
 
 .app-tagline {
@@ -1796,29 +1789,22 @@ html.dark .future-envelope-card {
 }
 
 .auth-logo {
-  font-family: var(--font-display);
-  font-size: clamp(1.625rem, 5.5vw, 2rem);
-  font-weight: 900;
-  letter-spacing: -0.05em;
-  margin-bottom: 0.5rem;
-  line-height: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 0.75rem;
 }
 
-.auth-logo-reflect {
-  background: linear-gradient(135deg, var(--accent) 20%, #a78bfa 60%, #c084fc 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+.auth-logo-img {
+  height: clamp(64px, 14vw, 96px);
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 16px rgba(124, 58, 237, 0.22));
+  transition: filter 0.3s ease;
 }
 
-.auth-logo-dot {
-  background: linear-gradient(135deg, #c084fc, #f0abfc);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  font-size: clamp(2rem, 6vw, 2.5rem);
-  line-height: 0;
-  vertical-align: -0.1em;
+.auth-logo-img:hover {
+  filter: drop-shadow(0 4px 24px rgba(124, 58, 237, 0.36));
 }
 
 .auth-tagline {
