@@ -1,12 +1,17 @@
 import { useState, useCallback, useEffect } from "react";
+import { useAuth } from "./context/AuthContext";
+import * as api from "./utils/api";
 import "./App.css";
 import EntryCard from "./components/EntryCard";
 import Calendar from "./components/Calendar";
+import AuthPage from "./pages/AuthPage";
 import { downloadPdf } from "./utils/downloadPdf";
 
 const MOODS = ["😊", "🙂", "😐", "😔", "😭"];
 
 export default function App() {
+  const { user, loading: authLoading, logout } = useAuth();
+
   const [theme, setTheme] = useState(() => {
     const stored = localStorage.getItem("theme");
     if (stored) return stored;
@@ -33,30 +38,24 @@ export default function App() {
   const [tasks, setTasks] = useState([{ text: "", done: false }]);
   const [lockedUntil, setLockedUntil] = useState("");
 
-  const [entries, setEntries] = useState(() => {
-    const loaded = JSON.parse(localStorage.getItem("entries") || "[]");
-    const today = new Date();
-    const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    let changed = false;
-    const updated = loaded.map(entry => {
-      if (entry.type === "future" && entry.lockedUntil && entry.lockedUntil <= key && !entry.delivered) {
-        changed = true;
-        return { ...entry, pinned: true, delivered: true };
-      }
-      return entry;
-    });
-    if (changed) localStorage.setItem("entries", JSON.stringify(updated));
-    return changed ? updated : loaded;
-  });
+  const [entries, setEntries] = useState([]);
+  const [entriesLoading, setEntriesLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    setEntriesLoading(true);
+    api
+      .getEntries()
+      .then((data) => setEntries(data.entries))
+      .catch((err) => console.error("Failed to load entries", err))
+      .finally(() => setEntriesLoading(false));
+  }, [user]);
 
   const [editingIndex, setEditingIndex] = useState(null);
   const [deletingIndex, setDeletingIndex] = useState(null);
   const [viewingIndex, setViewingIndex] = useState(null);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState(null);
 
-
-
-  // View state: "list" | "view" | "compose" | "choose" | "todo-compose" | "future-compose"
   const [view, setView] = useState("list");
   const navigateTo = (newView) => {
     if (document.startViewTransition) {
@@ -66,7 +65,6 @@ export default function App() {
     }
   };
 
-  // Toast
   const [toast, setToast] = useState(null);
   const showToast = useCallback((message) => {
     setToast(message);
@@ -75,11 +73,14 @@ export default function App() {
 
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  const visibleEntries = entries.filter(entry =>
-    !(entry.type === "future" && entry.lockedUntil && entry.lockedUntil > todayKey)
-  );
+  const visibleEntries = entries.filter((entry) => {
+    if (entry.type === "future" && entry.lockedUntil && entry.lockedUntil > todayKey) {
+      return false;
+    }
+    return true;
+  });
 
-  // Auto-save draft
+  // Auto-save draft (local only)
   useEffect(() => {
     if (view === "compose") {
       const hasContent = title.trim() || text.trim();
@@ -90,7 +91,7 @@ export default function App() {
         localStorage.removeItem("draft");
       }
     } else if (view === "todo-compose") {
-      const hasContent = title.trim() || tasks.some(t => t.text.trim());
+      const hasContent = title.trim() || tasks.some((t) => t.text.trim());
       if (hasContent) {
         const draft = { editingIndex, title, tasks };
         localStorage.setItem("todo-draft", JSON.stringify(draft));
@@ -134,7 +135,7 @@ export default function App() {
     if (savedTodoDraft) {
       try {
         const { editingIndex: dIndex, title: dTitle, tasks: dTasks } = JSON.parse(savedTodoDraft);
-        if (dTitle.trim() || dTasks.some(t => t.text.trim())) {
+        if (dTitle.trim() || dTasks.some((t) => t.text.trim())) {
           setEditingIndex(dIndex);
           setTitle(dTitle);
           setTasks(dTasks);
@@ -178,68 +179,78 @@ export default function App() {
   const [showCalendar, setShowCalendar] = useState(false);
 
   const handlePrevMonth = () => {
-    if (calMonth === 0) { setCalYear(y => y - 1); setCalMonth(11); }
-    else setCalMonth(m => m - 1);
+    if (calMonth === 0) {
+      setCalYear((y) => y - 1);
+      setCalMonth(11);
+    } else setCalMonth((m) => m - 1);
   };
   const handleNextMonth = () => {
-    if (calMonth === 11) { setCalYear(y => y + 1); setCalMonth(0); }
-    else setCalMonth(m => m + 1);
+    if (calMonth === 11) {
+      setCalYear((y) => y + 1);
+      setCalMonth(0);
+    } else setCalMonth((m) => m + 1);
   };
 
   // ─── Handlers ───────────────────────────────────────────
 
-  const saveEntry = () => {
+  const saveEntry = async () => {
     if (!title.trim() || !text.trim()) return;
 
-    const entry = {
+    const entryData = {
       title: title.trim(),
       text,
       mood,
-      date: new Date().toISOString(),
-      pinned: editingIndex !== null ? entries[editingIndex]?.pinned || false : false,
     };
 
-    let updated;
-    if (editingIndex !== null) {
-      updated = [...entries];
-      updated[editingIndex] = entry;
-      setEditingIndex(null);
-    } else {
-      updated = [entry, ...entries];
+    try {
+      if (editingIndex !== null) {
+        const entry = entries[editingIndex];
+        await api.updateEntry(entry.id, entryData);
+        const updated = [...entries];
+        updated[editingIndex] = { ...updated[editingIndex], ...entryData };
+        setEntries(updated);
+        setEditingIndex(null);
+        showToast("✅ Memory updated");
+      } else {
+        const result = await api.createEntry(entryData);
+        if (document.startViewTransition) {
+          document.startViewTransition(() => setEntries((prev) => [result.entry, ...prev]));
+        } else {
+          setEntries((prev) => [result.entry, ...prev]);
+        }
+        showToast("✨ Memory saved");
+      }
+    } catch (err) {
+      showToast("❌ Failed to save");
     }
 
-    if (document.startViewTransition) {
-      document.startViewTransition(() => setEntries(updated));
-    } else {
-      setEntries(updated);
-    }
-    localStorage.setItem("entries", JSON.stringify(updated));
     localStorage.removeItem("draft");
     setText("");
     setTitle("");
     navigateTo("list");
-    showToast(editingIndex !== null ? "✅ Memory updated" : "✨ Memory saved");
   };
 
-  const deleteEntry = (indexToDelete) => {
-    setConfirmDeleteIndex(indexToDelete);
+  const deleteEntry = (index) => {
+    setConfirmDeleteIndex(index);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     const indexToDelete = confirmDeleteIndex;
     setConfirmDeleteIndex(null);
     setDeletingIndex(indexToDelete);
-    setTimeout(() => {
-      const updated = entries.filter((_, i) => i !== indexToDelete);
-      if (document.startViewTransition) {
-        document.startViewTransition(() => setEntries(updated));
-      } else {
-        setEntries(updated);
-      }
-      localStorage.setItem("entries", JSON.stringify(updated));
+
+    try {
+      const entry = entries[indexToDelete];
+      await api.deleteEntry(entry.id);
+      setTimeout(() => {
+        setEntries((prev) => prev.filter((_, i) => i !== indexToDelete));
+        setDeletingIndex(null);
+        showToast("🗑️ Memory deleted");
+      }, 300);
+    } catch {
       setDeletingIndex(null);
-      showToast("🗑️ Memory deleted");
-    }, 300);
+      showToast("❌ Failed to delete");
+    }
   };
 
   const editEntry = (index) => {
@@ -339,56 +350,72 @@ export default function App() {
   // ─── Todo Handlers ───────────────────────────────
 
   const handleTaskChange = (index, value) => {
-    setTasks(prev => prev.map((t, i) => (i === index ? { ...t, text: value } : t)));
+    setTasks((prev) => prev.map((t, i) => (i === index ? { ...t, text: value } : t)));
   };
 
   const handleTaskToggle = (index) => {
-    setTasks(prev => prev.map((t, i) => (i === index ? { ...t, done: !t.done } : t)));
+    setTasks((prev) => prev.map((t, i) => (i === index ? { ...t, done: !t.done } : t)));
   };
 
   const handleAddTask = () => {
-    setTasks(prev => [...prev, { text: "", done: false }]);
+    setTasks((prev) => [...prev, { text: "", done: false }]);
   };
 
   const handleRemoveTask = (index) => {
-    setTasks(prev => prev.filter((_, i) => i !== index));
+    setTasks((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const saveTodo = () => {
+  const saveTodo = async () => {
     if (!title.trim()) return;
 
-    const validTasks = tasks.filter(t => t.text.trim());
+    const validTasks = tasks.filter((t) => t.text.trim());
     if (validTasks.length === 0) return;
 
-    const entry = {
+    const entryData = {
       type: "todo",
       title: title.trim(),
       tasks: validTasks,
-      date: new Date().toISOString(),
-      pinned: editingIndex !== null ? entries[editingIndex]?.pinned || false : false,
     };
 
-    let updated;
-    if (editingIndex !== null) {
-      updated = [...entries];
-      updated[editingIndex] = entry;
-      setEditingIndex(null);
-    } else {
-      updated = [entry, ...entries];
+    try {
+      if (editingIndex !== null) {
+        const entry = entries[editingIndex];
+        await api.updateEntry(entry.id, entryData);
+        const updated = [...entries];
+        updated[editingIndex] = { ...updated[editingIndex], ...entryData };
+        setEntries(updated);
+        setEditingIndex(null);
+        showToast("✅ List updated");
+      } else {
+        const result = await api.createEntry(entryData);
+        setEntries((prev) => [result.entry, ...prev]);
+        showToast("📋 List saved");
+      }
+    } catch {
+      showToast("❌ Failed to save");
     }
 
-    if (document.startViewTransition) {
-      document.startViewTransition(() => setEntries(updated));
-    } else {
-      setEntries(updated);
-    }
-    localStorage.setItem("entries", JSON.stringify(updated));
     localStorage.removeItem("todo-draft");
     setTitle("");
     setTasks([{ text: "", done: false }]);
     navigateTo("list");
-    showToast(editingIndex !== null ? "✅ List updated" : "📋 List saved");
   };
+
+  const handleViewToggleTask = useCallback(
+    async (entryIndex, taskIndex) => {
+      setEntries((prev) => {
+        const updated = [...prev];
+        const entry = { ...updated[entryIndex] };
+        const tasksList = [...(entry.tasks || [])];
+        tasksList[taskIndex] = { ...tasksList[taskIndex], done: !tasksList[taskIndex].done };
+        entry.tasks = tasksList;
+        updated[entryIndex] = entry;
+        api.updateEntry(entry.id, { tasks: tasksList }).catch(() => {});
+        return updated;
+      });
+    },
+    []
+  );
 
   const cancelTodo = () => {
     localStorage.removeItem("todo-draft");
@@ -400,44 +427,43 @@ export default function App() {
 
   // ─── Future Handlers ────────────────────────────
 
-  const saveFuture = () => {
+  const saveFuture = async () => {
     if (!title.trim() || !text.trim() || !lockedUntil) return;
 
     if (lockedUntil <= todayKey) return;
 
-    const entry = {
+    const entryData = {
       type: "future",
       title: title.trim(),
       text,
       mood,
-      lockedUntil: lockedUntil,
-      date: new Date().toISOString(),
-      pinned: editingIndex !== null ? entries[editingIndex]?.pinned || false : false,
-      delivered: editingIndex !== null ? (entries[editingIndex]?.delivered || false) : false,
+      lockedUntil,
     };
 
-    let updated;
-    if (editingIndex !== null) {
-      updated = [...entries];
-      updated[editingIndex] = entry;
-      setEditingIndex(null);
-    } else {
-      updated = [entry, ...entries];
+    try {
+      if (editingIndex !== null) {
+        const entry = entries[editingIndex];
+        await api.updateEntry(entry.id, entryData);
+        const updated = [...entries];
+        updated[editingIndex] = { ...updated[editingIndex], ...entryData };
+        setEntries(updated);
+        setEditingIndex(null);
+        showToast("🔮 Letter updated");
+      } else {
+        const result = await api.createEntry(entryData);
+        setEntries((prev) => [result.entry, ...prev]);
+        showToast("✨ Sent to the future");
+      }
+    } catch {
+      showToast("❌ Failed to save");
     }
 
-    if (document.startViewTransition) {
-      document.startViewTransition(() => setEntries(updated));
-    } else {
-      setEntries(updated);
-    }
-    localStorage.setItem("entries", JSON.stringify(updated));
     localStorage.removeItem("future-draft");
     setTitle("");
     setText("");
     setMood("😊");
     setLockedUntil("");
     navigateTo("list");
-    showToast(editingIndex !== null ? "🔮 Letter updated" : "✨ Sent to the future");
   };
 
   const cancelFuture = () => {
@@ -450,17 +476,20 @@ export default function App() {
     navigateTo("list");
   };
 
-  const togglePin = (index) => {
+  const togglePin = async (index) => {
+    const entry = entries[index];
+    const wasPinned = entry.pinned;
     const updated = [...entries];
-    const wasPinned = updated[index].pinned;
-    updated[index].pinned = !wasPinned;
-    if (document.startViewTransition) {
-      document.startViewTransition(() => setEntries(updated));
-    } else {
+    updated[index] = { ...updated[index], pinned: !wasPinned };
+    setEntries(updated);
+    try {
+      await api.updateEntry(entry.id, { pinned: !wasPinned });
+      showToast(wasPinned ? "📍 Unpinned" : "📌 Pinned to top");
+    } catch {
+      updated[index] = { ...updated[index], pinned: wasPinned };
       setEntries(updated);
+      showToast("❌ Failed to update");
     }
-    localStorage.setItem("entries", JSON.stringify(updated));
-    showToast(wasPinned ? "📍 Unpinned" : "📌 Pinned to top");
   };
 
   // ─── Filtering ──────────────────────────────────────────
@@ -472,7 +501,7 @@ export default function App() {
   };
 
   const displayedEntries = visibleEntries
-    .map(entry => ({ ...entry, originalIndex: entries.indexOf(entry) }))
+    .map((entry) => ({ ...entry, originalIndex: entries.indexOf(entry) }))
     .sort((a, b) => {
       const aFutureTop = a.type === "future" && a.pinned;
       const bFutureTop = b.type === "future" && b.pinned;
@@ -485,7 +514,7 @@ export default function App() {
     const query = search.toLowerCase();
     let searchText;
     if (entry.type === "todo") {
-      searchText = (entry.title || "") + " " + (entry.tasks || []).map(t => t.text).join(" ");
+      searchText = (entry.title || "") + " " + (entry.tasks || []).map((t) => t.text).join(" ");
     } else if (entry.type === "future") {
       searchText = (entry.title || "") + " " + (entry.text || "") + " future letter";
     } else {
@@ -496,15 +525,33 @@ export default function App() {
     return matchesSearch && matchesDate;
   });
 
+  // ─── Auth guard ────────────────────────────────────────────
+
+  if (authLoading) {
+    return (
+      <div className="app">
+        <div className="auth-loading">
+          <div className="auth-loading-spinner" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
   // ─── Render ─────────────────────────────────────────────
 
   return (
     <div className="app">
-
-      {/* Theme Toggle Top Bar */}
+      {/* Top Bar */}
       <div className="top-bar">
         <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>
           {theme === "light" ? "🌙" : "☀️"}
+        </button>
+        <button className="btn btn-ghost logout-btn" onClick={logout}>
+          Log out
         </button>
       </div>
 
@@ -521,7 +568,7 @@ export default function App() {
           <div className="modal-card card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-icon">🗑️</div>
             <h3 className="modal-title">Delete this memory?</h3>
-            <p className="modal-body">This can't be undone. Your memory will be gone forever.</p>
+            <p className="modal-body">This can&apos;t be undone. Your memory will be gone forever.</p>
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setConfirmDeleteIndex(null)}>
                 Keep it
@@ -550,74 +597,83 @@ export default function App() {
             <span className="add-entry-icon">＋</span> New Entry
           </button>
 
-          <div className="search-row">
-            <div className="search-container">
-              <span className="search-icon">🔍</span>
-              <input
-                id="search-input"
-                type="text"
-                className="search-input"
-                placeholder="Search memories…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+          {entriesLoading ? (
+            <div className="entries-loading">
+              <div className="entries-loading-spinner" />
+              <p>Loading your memories…</p>
             </div>
-            <button
-              className={`cal-toggle-btn ${showCalendar ? "active" : ""} ${selectedDate ? "filtered" : ""}`}
-              onClick={() => setShowCalendar(!showCalendar)}
-              aria-label="Toggle calendar"
-              title="Filter by date"
-            >
-              📅
-            </button>
-            {showCalendar && (
-              <div className="calendar-popover">
-                <Calendar
-                  entries={visibleEntries}
-                  selectedDate={selectedDate}
-                  onSelectDate={(date) => { setSelectedDate(date); setShowCalendar(false); }}
-                  year={calYear}
-                  month={calMonth}
-                  onPrevMonth={handlePrevMonth}
-                  onNextMonth={handleNextMonth}
-                />
+          ) : (
+            <>
+              <div className="search-row">
+                <div className="search-container">
+                  <span className="search-icon">🔍</span>
+                  <input
+                    id="search-input"
+                    type="text"
+                    className="search-input"
+                    placeholder="Search memories…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+                <button
+                  className={`cal-toggle-btn ${showCalendar ? "active" : ""} ${selectedDate ? "filtered" : ""}`}
+                  onClick={() => setShowCalendar(!showCalendar)}
+                  aria-label="Toggle calendar"
+                  title="Filter by date"
+                >
+                  📅
+                </button>
+                {showCalendar && (
+                  <div className="calendar-popover">
+                    <Calendar
+                      entries={visibleEntries}
+                      selectedDate={selectedDate}
+                      onSelectDate={(date) => { setSelectedDate(date); setShowCalendar(false); }}
+                      year={calYear}
+                      month={calMonth}
+                      onPrevMonth={handlePrevMonth}
+                      onNextMonth={handleNextMonth}
+                    />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="section-header">
-            <span className="section-title">Memories</span>
-            {filteredEntries.length > 0 && (
-              <span className="entry-count">{filteredEntries.length}</span>
-            )}
-          </div>
+              <div className="section-header">
+                <span className="section-title">Memories</span>
+                {filteredEntries.length > 0 && (
+                  <span className="entry-count">{filteredEntries.length}</span>
+                )}
+              </div>
 
-          {filteredEntries.length === 0 && (
-            <div className="empty-state">
-              <div className="empty-icon">📝</div>
-              <p className="empty-title">
-                {visibleEntries.length === 0 ? "No memories yet" : "No matching memories"}
-              </p>
-              <p className="empty-subtitle">
-                {visibleEntries.length === 0
-                  ? "Start writing to capture your thoughts"
-                  : "Try adjusting your search or date filter"}
-              </p>
-            </div>
+              {filteredEntries.length === 0 && (
+                <div className="empty-state">
+                  <div className="empty-icon">📝</div>
+                  <p className="empty-title">
+                    {visibleEntries.length === 0 ? "No memories yet" : "No matching memories"}
+                  </p>
+                  <p className="empty-subtitle">
+                    {visibleEntries.length === 0
+                      ? "Start writing to capture your thoughts"
+                      : "Try adjusting your search or date filter"}
+                  </p>
+                </div>
+              )}
+
+              {filteredEntries.map((entry) => (
+                <EntryCard
+                  key={entry.id || entry.originalIndex}
+                  entry={entry}
+                  index={entry.originalIndex}
+                  onEdit={editEntry}
+                  onDelete={deleteEntry}
+                  onTogglePin={togglePin}
+                  onView={handleViewEntry}
+                  isDeleting={deletingIndex === entry.originalIndex}
+                />
+              ))}
+            </>
           )}
-
-          {filteredEntries.map((entry) => (
-            <EntryCard
-              key={entry.originalIndex}
-              entry={entry}
-              index={entry.originalIndex}
-              onEdit={editEntry}
-              onDelete={deleteEntry}
-              onTogglePin={togglePin}
-              onView={handleViewEntry}
-              isDeleting={deletingIndex === entry.originalIndex}
-            />
-          ))}
         </>
       )}
 
@@ -700,6 +756,12 @@ export default function App() {
                     className="todo-task-input"
                     value={task.text}
                     onChange={(e) => handleTaskChange(i, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddTask();
+                      }
+                    }}
                     placeholder="Write a task…"
                   />
                   <button
@@ -724,7 +786,7 @@ export default function App() {
               <button
                 className="btn btn-primary"
                 onClick={saveTodo}
-                disabled={!title.trim() || !tasks.some(t => t.text.trim())}
+                disabled={!title.trim() || !tasks.some((t) => t.text.trim())}
               >
                 {editingIndex !== null ? "Update List" : "Save List"}
               </button>
@@ -828,8 +890,8 @@ export default function App() {
                     ✏️ Edit
                   </button>
                 )}
-                {entry && (
-                  <button className="btn btn-ghost" onClick={() => downloadPdf(entry, document.querySelector(".entry-view"))} style={{ marginLeft: !isLocked && entry?.type !== "future" ? "0.5rem" : "auto" }}>
+                {entry && entry.type !== "todo" && (
+                  <button className="btn btn-ghost" onClick={() => downloadPdf(entry)} style={{ marginLeft: !isLocked && entry?.type !== "future" ? "0.5rem" : "auto" }}>
                     📄 PDF
                   </button>
                 )}
@@ -884,7 +946,12 @@ export default function App() {
                     {entry?.type === "todo" ? (
                       <div className="todo-view-list">
                         {entry?.tasks?.map((task, i) => (
-                          <div key={i} className={`todo-view-row ${task.done ? "done" : ""}`}>
+                          <div
+                            key={i}
+                            className={`todo-view-row ${task.done ? "done" : ""}`}
+                            onClick={() => handleViewToggleTask(viewingIndex, i)}
+                            style={{ cursor: "pointer" }}
+                          >
                             <span className="todo-view-check">{task.done ? "✓" : "○"}</span>
                             <span className="todo-view-text">{task.text}</span>
                           </div>
@@ -965,7 +1032,6 @@ export default function App() {
           </div>
         </>
       )}
-
     </div>
   );
 }
