@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getDb, saveDb } from "../db.js";
+import { getDb } from "../db.js";
 import { authMiddleware } from "../middleware/auth.js";
 
 const router = Router();
@@ -12,78 +12,76 @@ router.get("/", async (req, res) => {
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-  const result = db.exec(
+  const result = await db.query(
     `SELECT id, type, title, text, mood, tasks, locked_until, delivered, pinned, date
-     FROM entries WHERE user_id = ? ORDER BY pinned DESC, date DESC`,
+     FROM entries
+     WHERE user_id = $1
+     ORDER BY pinned DESC, date DESC`,
     [req.userId]
   );
 
-  const entries = result.length > 0 ? result[0].values.map((row) => {
+  const entries = result.rows.map((row) => {
     const entry = {
-      id: row[0],
-      type: row[1] || "journal",
-      title: row[2] || "",
-      text: row[3] || "",
-      mood: row[4] || "😊",
-      date: row[9],
-      pinned: !!row[8],
+      id: row.id,
+      type: row.type || "journal",
+      title: row.title || "",
+      text: row.text || "",
+      mood: row.mood || "😊",
+      date: row.date,
+      pinned: row.pinned,
     };
 
     if (entry.type === "todo") {
-      try {
-        entry.tasks = JSON.parse(row[5] || "[]");
-      } catch {
-        entry.tasks = [];
-      }
+      entry.tasks = row.tasks || [];
     }
 
     if (entry.type === "future") {
-      entry.lockedUntil = row[6] || "";
-      entry.delivered = !!row[7];
+      entry.lockedUntil = row.locked_until || "";
+      entry.delivered = row.delivered;
+
       if (entry.lockedUntil && entry.lockedUntil <= todayKey && !entry.delivered) {
         entry.delivered = true;
         entry.pinned = true;
-        db.run(
-          "UPDATE entries SET delivered = 1, pinned = 1 WHERE id = ?",
+
+        db.query(
+          "UPDATE entries SET delivered = true, pinned = true WHERE id = $1",
           [entry.id]
         );
-        saveDb();
       }
     }
 
     return entry;
-  }) : [];
+  });
 
   res.json({ entries });
 });
 
+
 router.post("/", async (req, res) => {
   const db = await getDb();
+
   const { type, title, text, mood, tasks, lockedUntil, pinned } = req.body;
 
-  const tasksJson = tasks ? JSON.stringify(tasks) : "[]";
-  const now = new Date().toISOString();
-
-  db.run(
-    `INSERT INTO entries (user_id, type, title, text, mood, tasks, locked_until, delivered, pinned, date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  const result = await db.query(
+    `INSERT INTO entries
+     (user_id, type, title, text, mood, tasks, locked_until, delivered, pinned, date)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     RETURNING id`,
     [
-        req.userId,
-        type || "journal",
-        title || "",
-        text || "",
-        mood || "😊",
-        tasksJson,
-        lockedUntil || null,
-        0,
-        pinned ? 1 : 0,
-        now,
-      ]
+      req.userId,
+      type || "journal",
+      title || "",
+      text || "",
+      mood || "😊",
+      JSON.stringify(tasks || []),
+      lockedUntil || null,
+      false,
+      !!pinned,
+      new Date().toISOString(),
+    ]
   );
 
-  const result = db.exec("SELECT last_insert_rowid() as id");
-  saveDb();
-  const id = result[0].values[0][0];
+  const id = result.rows[0].id;
 
   res.status(201).json({
     entry: {
@@ -96,70 +94,92 @@ router.post("/", async (req, res) => {
       lockedUntil: lockedUntil || "",
       delivered: false,
       pinned: !!pinned,
-      date: now,
+      date: new Date().toISOString(),
     },
   });
 });
 
+
 router.put("/:id", async (req, res) => {
   const db = await getDb();
-  const { id } = req.params;
-  const { type, title, text, mood, tasks, lockedUntil, pinned, delivered } = req.body;
 
-  const existing = db.exec(
-    "SELECT id FROM entries WHERE id = ? AND user_id = ?",
+  const { id } = req.params;
+
+  const {
+    type,
+    title,
+    text,
+    mood,
+    tasks,
+    lockedUntil,
+    pinned,
+    delivered,
+  } = req.body;
+
+
+  const existing = await db.query(
+    "SELECT id FROM entries WHERE id = $1 AND user_id = $2",
     [id, req.userId]
   );
 
-  if (existing.length === 0 || existing[0].values.length === 0) {
+  if (existing.rows.length === 0) {
     return res.status(404).json({ error: "Entry not found" });
   }
 
-  const tasksJson = tasks ? JSON.stringify(tasks) : null;
 
-  const deliveredVal = delivered !== undefined ? (delivered ? 1 : 0) : null;
-  const pinnedVal = pinned !== undefined ? (pinned ? 1 : 0) : null;
-
-  db.run(
+  await db.query(
     `UPDATE entries SET
-      type = COALESCE(?, type),
-      title = COALESCE(?, title),
-      text = COALESCE(?, text),
-      mood = COALESCE(?, mood),
-      tasks = COALESCE(?, tasks),
-      locked_until = COALESCE(?, locked_until),
-      delivered = COALESCE(?, delivered),
-      pinned = COALESCE(?, pinned)
-     WHERE id = ? AND user_id = ?`,
+      type = COALESCE($1,type),
+      title = COALESCE($2,title),
+      text = COALESCE($3,text),
+      mood = COALESCE($4,mood),
+      tasks = COALESCE($5,tasks),
+      locked_until = COALESCE($6,locked_until),
+      delivered = COALESCE($7,delivered),
+      pinned = COALESCE($8,pinned)
+     WHERE id = $9 AND user_id = $10`,
     [
-        type ?? null, title ?? null, text ?? null, mood ?? null,
-        tasksJson, lockedUntil ?? null,
-        deliveredVal, pinnedVal,
-        id, req.userId,
-      ]
+      type ?? null,
+      title ?? null,
+      text ?? null,
+      mood ?? null,
+      tasks ? JSON.stringify(tasks) : null,
+      lockedUntil ?? null,
+      delivered ?? null,
+      pinned ?? null,
+      id,
+      req.userId,
+    ]
   );
-  saveDb();
+
 
   res.json({ success: true });
 });
+
 
 router.delete("/:id", async (req, res) => {
   const db = await getDb();
+
   const { id } = req.params;
 
-  const existing = db.exec(
-    "SELECT id FROM entries WHERE id = ? AND user_id = ?",
+  const existing = await db.query(
+    "SELECT id FROM entries WHERE id = $1 AND user_id = $2",
     [id, req.userId]
   );
 
-  if (existing.length === 0 || existing[0].values.length === 0) {
+  if (existing.rows.length === 0) {
     return res.status(404).json({ error: "Entry not found" });
   }
 
-  db.run("DELETE FROM entries WHERE id = ? AND user_id = ?", [id, req.userId]);
-  saveDb();
+
+  await db.query(
+    "DELETE FROM entries WHERE id = $1 AND user_id = $2",
+    [id, req.userId]
+  );
+
 
   res.json({ success: true });
 });
+
 
 export default router;

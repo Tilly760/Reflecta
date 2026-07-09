@@ -15,15 +15,26 @@ app.use("/api/auth", authRoutes);
 app.use("/api/entries", entryRoutes);
 
 app.get("/api/me", authMiddleware, async (req, res) => {
-  const db = await getDb();
-  const result = db.exec("SELECT id, name, email FROM users WHERE id = ?", [req.userId]);
+const db = await getDb();
 
-  if (result.length === 0 || result[0].values.length === 0) {
-    return res.status(404).json({ error: "User not found" });
-  }
+const result = await db.query(
+  "SELECT id, name, email FROM users WHERE id = $1",
+  [req.userId]
+);
 
-  const row = result[0].values[0];
-  res.json({ user: { id: row[0], name: row[1], email: row[2] } });
+if (result.rows.length === 0) {
+  return res.status(404).json({ error: "User not found" });
+}
+
+const user = result.rows[0];
+
+res.json({
+  user: {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+  },
+});
 });
 
 async function start() {

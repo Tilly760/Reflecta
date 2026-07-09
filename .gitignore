@@ -25,3 +25,11 @@ dist-ssr
 
 # SQLite database
 *.db
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Expo
+.expo/

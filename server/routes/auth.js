@@ -1,6 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { getDb, saveDb } from "../db.js";
+import { getDb } from "../db.js";
 import { generateToken } from "../middleware/auth.js";
 
 const router = Router();
@@ -18,25 +18,36 @@ router.post("/register", async (req, res) => {
 
   const db = await getDb();
 
-  const existing = db.exec("SELECT id FROM users WHERE email = ?", [email]);
-  if (existing.length > 0 && existing[0].values.length > 0) {
+  const existing = await db.query(
+    "SELECT id FROM users WHERE email = $1",
+    [email]
+  );
+
+  if (existing.rows.length > 0) {
     return res.status(409).json({ error: "An account with this email already exists" });
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
-  db.run("INSERT INTO users (email, password, name) VALUES (?, ?, ?)", [email, hashedPassword, name]);
-  saveDb();
 
-  const result = db.exec("SELECT id, name, email FROM users WHERE email = ?", [email]);
-  const user = result[0].values[0];
-  const userId = user[0];
-  const token = generateToken(userId);
+  const result = await db.query(
+    "INSERT INTO users (email, password, name) VALUES ($1, $2, $3) RETURNING id, name, email",
+    [email, hashedPassword, name]
+  );
+
+  const user = result.rows[0];
+
+  const token = generateToken(user.id);
 
   res.status(201).json({
     token,
-    user: { id: userId, name: user[1], email: user[2] },
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+    },
   });
 });
+
 
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
@@ -47,28 +58,32 @@ router.post("/login", async (req, res) => {
 
   const db = await getDb();
 
-  const result = db.exec("SELECT id, name, email, password FROM users WHERE email = ?", [email]);
+  const result = await db.query(
+    "SELECT id, name, email, password FROM users WHERE email = $1",
+    [email]
+  );
 
-  if (result.length === 0 || result[0].values.length === 0) {
+  if (result.rows.length === 0) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
-  const row = result[0].values[0];
-  const userId = row[0];
-  const name = row[1];
-  const userEmail = row[2];
-  const hashedPassword = row[3];
+  const user = result.rows[0];
 
-  const valid = await bcrypt.compare(password, hashedPassword);
+  const valid = await bcrypt.compare(password, user.password);
+
   if (!valid) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
-  const token = generateToken(userId);
+  const token = generateToken(user.id);
 
   res.json({
     token,
-    user: { id: userId, name, email: userEmail },
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+    },
   });
 });
 
