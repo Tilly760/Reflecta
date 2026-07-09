@@ -1,4 +1,6 @@
-const API_BASE = "/api";
+const API_BASE = import.meta.env.DEV
+  ? "/api"
+  : "https://reflecta-m99u.onrender.com/api";
 
 function getToken() {
   return localStorage.getItem("token");
