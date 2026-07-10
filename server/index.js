@@ -13,6 +13,8 @@ app.use(
     origin: [
       "http://localhost:5173",
       "https://reflecta-two.vercel.app",
+      "capacitor://localhost",  // Android APK (Capacitor)
+      "http://localhost",       // Android WebView fallback
     ],
     credentials: true,
   })
