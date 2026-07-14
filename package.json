@@ -4,10 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "start": "node server/index.js",
     "dev": "node server/index.js & vite",
     "dev:server": "node server/index.js",
     "dev:client": "vite",
     "build": "vite build",
+    "build:android": "VITE_CAPACITOR=true vite build && npx cap sync android",
     "lint": "eslint .",
     "preview": "vite preview",
     "predeploy": "npm run build",
